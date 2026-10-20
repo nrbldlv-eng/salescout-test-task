@@ -12,6 +12,8 @@ export interface Product {
   maxPrice: number;
   step: number;
   competitors: Competitor[];
+  imageUrl?: string;
+  kaspiUrl?: string;
 }
 
 export type Reason = "UNDERCUT" | "AT_MIN" | "AT_MAX" | "NO_COMPETITORS";

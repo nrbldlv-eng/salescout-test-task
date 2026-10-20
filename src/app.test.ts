@@ -16,10 +16,22 @@ describe("HTTP API", () => {
   });
 
   describe("GET /products", () => {
-    it("returns initial sample products", async () => {
+    it("returns real products array with valid product structures", async () => {
       const res = await request(app).get("/products");
       expect(res.status).toBe(200);
-      expect(res.body).toEqual(sampleProducts);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBeGreaterThan(0);
+      expect(res.body[0]).toHaveProperty("sku");
+      expect(res.body[0]).toHaveProperty("name");
+      expect(res.body[0]).toHaveProperty("competitors");
+    });
+  });
+
+  describe("POST /kaspi/search", () => {
+    it("returns 400 when query parameter is missing or empty", async () => {
+      const res = await request(app).post("/kaspi/search").send({});
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty("error");
     });
   });
 
@@ -56,7 +68,6 @@ describe("HTTP API", () => {
         },
         {
           sku: "INVALID",
-          // missing prices and competitors
         },
       ];
 
@@ -81,7 +92,6 @@ describe("HTTP API", () => {
       expect(res.body).toEqual(expectedResults);
       expect(res.body.length).toBe(sampleProducts.length);
 
-      // Verify order matches input
       for (let i = 0; i < sampleProducts.length; i++) {
         expect(res.body[i].sku).toBe(sampleProducts[i].sku);
       }

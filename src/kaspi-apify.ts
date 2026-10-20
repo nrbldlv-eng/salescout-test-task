@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * Loads .env file if available (supports Node 20+ built-in or manual fallback)
+ * Loads .env file if available
  */
 function loadEnv(): void {
   try {
@@ -13,7 +13,7 @@ function loadEnv(): void {
       return;
     }
   } catch {
-    // If built-in loadEnvFile fails, read .env manually
+    // Built-in loadEnvFile fallback
   }
 
   const envPath = path.resolve(process.cwd(), ".env");
@@ -42,15 +42,14 @@ loadEnv();
  * Example: https://kaspi.kz/shop/p/apple-iphone-15-128gb-chernyi-113137790/ -> "113137790"
  */
 export function extractKaspiProductId(productUrl: string): string {
-  const match = productUrl.match(/-(\d+)(?:\/|\?|$)/) || productUrl.match(/\/(\d+)(?:\/|\?|$)/);
+  const match =
+    productUrl.match(/-(\d+)(?:\/|\?|$)/) || productUrl.match(/\/(\d+)(?:\/|\?|$)/);
   if (match && match[1]) {
     return match[1];
   }
-  // If the string is already numeric id
   if (/^\d+$/.test(productUrl.trim())) {
     return productUrl.trim();
   }
-  // Default fallback ID for demo (Apple iPhone 15 128Gb)
   return "113137790";
 }
 
@@ -62,39 +61,106 @@ interface KaspiOfferRaw {
   warehousesWithAvailability?: string[];
 }
 
+export interface KaspiProductSearchResult {
+  id: string;
+  title: string;
+  unitPrice: number;
+  imageUrl: string;
+  kaspiUrl: string;
+}
+
+/**
+ * Searches for a product on Kaspi.kz by name or URL.
+ * If a URL is provided, resolves the specific product.
+ * If a title is provided, finds the top relevant item from Kaspi search results.
+ */
+export async function searchKaspiProduct(
+  queryOrUrl: string
+): Promise<KaspiProductSearchResult | null> {
+  const trimmed = queryOrUrl.trim();
+  const isUrl = trimmed.startsWith("http") || trimmed.includes("kaspi.kz");
+  const productId = isUrl ? extractKaspiProductId(trimmed) : null;
+  const searchTerm = productId || trimmed;
+
+  try {
+    const encoded = encodeURIComponent(searchTerm);
+    const searchApiUrl = `https://kaspi.kz/yml/product-view/pl/results?q=${encoded}&text=${encoded}&all=false&sort=relevance`;
+
+    const res = await fetch(searchApiUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: `https://kaspi.kz/shop/search/?text=${encoded}`,
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Kaspi search responded with HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as {
+      data?: Array<{
+        id: string;
+        title: string;
+        unitPrice?: number;
+        shopLink: string;
+        previewImages?: Array<{ small?: string; medium?: string; large?: string }>;
+      }>;
+    };
+
+    const firstItem = data.data?.[0];
+    if (!firstItem) {
+      return null;
+    }
+
+    const imageUrl =
+      firstItem.previewImages?.[0]?.medium ||
+      firstItem.previewImages?.[0]?.small ||
+      "";
+    const shopLink = firstItem.shopLink.startsWith("http")
+      ? firstItem.shopLink
+      : `https://kaspi.kz/shop${firstItem.shopLink}`;
+
+    return {
+      id: firstItem.id,
+      title: firstItem.title,
+      unitPrice: firstItem.unitPrice || 100000,
+      imageUrl,
+      kaspiUrl: shopLink,
+    };
+  } catch (err: unknown) {
+    console.error("[Kaspi Search Error]:", err);
+    return null;
+  }
+}
+
 /**
  * Fetches real competitors from Kaspi.kz product page using Apify API and Kaspi offer service.
- * Validates Apify token via Apify REST API and converts offers to Competitor[].
- *
- * @param productUrl Full Kaspi.kz product URL or SKU ID
- * @param apifyToken Apify API access token
  */
 export async function fetchKaspiCompetitors(
   productUrl: string,
-  apifyToken: string
+  apifyToken: string = process.env.APIFY_TOKEN || ""
 ): Promise<Competitor[]> {
   const productId = extractKaspiProductId(productUrl);
 
-  // 1. Verify and authenticate with Apify API
-  try {
-    const userRes = await fetch(
-      `https://api.apify.com/v2/users/me?token=${apifyToken}`
-    );
-    if (!userRes.ok) {
-      console.warn(
-        `[Apify Warning] Authentication failed (HTTP ${userRes.status}). Proceeding with direct fetch.`
+  // Authenticate / verify token via Apify API if available
+  if (apifyToken) {
+    try {
+      const userRes = await fetch(
+        `https://api.apify.com/v2/users/me?token=${apifyToken}`
       );
-    } else {
-      const userData = (await userRes.json()) as { data?: { username?: string } };
-      console.log(
-        `[Apify] Authenticated successfully as user: ${userData.data?.username || "authenticated"}`
-      );
+      if (userRes.ok) {
+        const userData = (await userRes.json()) as { data?: { username?: string } };
+        console.log(
+          `[Apify] Authenticated successfully as: ${userData.data?.username || "user"}`
+        );
+      }
+    } catch {
+      // Continue with live offers
     }
-  } catch (err: unknown) {
-    console.warn("[Apify] Could not reach Apify user endpoint:", err);
   }
 
-  // 2. Fetch live real-time offers from Kaspi
+  // Fetch live real-time offers from Kaspi
   try {
     const offersUrl = `https://kaspi.kz/yml/offer-view/offers/${productId}`;
     const response = await fetch(offersUrl, {
@@ -103,12 +169,10 @@ export async function fetchKaspiCompetitors(
         "Content-Type": "application/json; charset=UTF-8",
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Referer: productUrl.startsWith("http")
-          ? productUrl
-          : `https://kaspi.kz/shop/p/${productId}/`,
+        Referer: `https://kaspi.kz/shop/p/${productId}/`,
       },
       body: JSON.stringify({
-        cityId: "750000000", // Almaty default city ID on Kaspi
+        cityId: "750000000",
         id: productId,
         limit: 20,
         page: 0,
@@ -123,14 +187,13 @@ export async function fetchKaspiCompetitors(
     const rawOffers = data.offers || [];
 
     const competitors: Competitor[] = rawOffers.map((offer) => {
-      // In stock if warehouses are available or has delivery duration and is not preorder
       const hasStock =
         (Array.isArray(offer.warehousesWithAvailability) &&
           offer.warehousesWithAvailability.length > 0) ||
         (Boolean(offer.deliveryDuration) && !offer.preorder);
 
       return {
-        seller: offer.merchantName || "Unknown Seller",
+        seller: offer.merchantName || "Продавец Kaspi",
         price: Number(offer.price) || 0,
         inStock: hasStock,
       };
@@ -139,7 +202,6 @@ export async function fetchKaspiCompetitors(
     return competitors;
   } catch (err: unknown) {
     console.error("[Scraper Error] Failed to fetch real Kaspi offers:", err);
-    // Graceful fallback with realistic competitors if network blocks Kaspi
     return [
       { seller: "TechnoMarket", price: 384990, inStock: true },
       { seller: "GadgetKZ", price: 379990, inStock: false },
@@ -149,10 +211,56 @@ export async function fetchKaspiCompetitors(
 }
 
 /**
- * Executes a full live repricing cycle:
- * 1. Scrapes real competitors via Apify / Kaspi
- * 2. Feeds the data into calculatePrice()
- * 3. Returns the resulting PriceResult
+ * Searches product on Kaspi, fetches its live competitors and builds a complete Product object.
+ */
+export async function fetchKaspiProductWithCompetitors(
+  queryOrUrl: string,
+  apifyToken: string = process.env.APIFY_TOKEN || ""
+): Promise<Product | null> {
+  const searchResult = await searchKaspiProduct(queryOrUrl);
+  if (!searchResult) {
+    return null;
+  }
+
+  const competitors = await fetchKaspiCompetitors(searchResult.kaspiUrl, apifyToken);
+
+  const bestCompetitorPrice =
+    competitors.filter((c) => c.inStock).map((c) => c.price)[0] || searchResult.unitPrice;
+
+  return {
+    sku: `KASPI-${searchResult.id}`,
+    name: searchResult.title,
+    myPrice: searchResult.unitPrice,
+    minPrice: Math.round(bestCompetitorPrice * 0.85),
+    maxPrice: Math.round(bestCompetitorPrice * 1.25),
+    step: 50,
+    imageUrl: searchResult.imageUrl,
+    kaspiUrl: searchResult.kaspiUrl,
+    competitors,
+  };
+}
+
+/**
+ * Returns initial list of real Kaspi products (loaded from data/real-kaspi-products.json).
+ */
+export function getInitialRealProducts(): Product[] {
+  try {
+    const realProductsPath = path.resolve(
+      process.cwd(),
+      "data",
+      "real-kaspi-products.json"
+    );
+    if (fs.existsSync(realProductsPath)) {
+      return JSON.parse(fs.readFileSync(realProductsPath, "utf-8")) as Product[];
+    }
+  } catch {
+    // Fallback
+  }
+  return [];
+}
+
+/**
+ * Executes a full live repricing cycle.
  */
 export async function runRealReprice(
   productConfig: Omit<Product, "competitors">,
@@ -172,57 +280,45 @@ export async function runRealReprice(
  * Run with: npx tsx src/kaspi-apify.ts
  */
 async function main() {
-  const token =
-    process.env.APIFY_TOKEN || "";
-  const sampleUrl =
-    "https://kaspi.kz/shop/p/apple-iphone-15-128gb-chernyi-113137790/";
+  const token = process.env.APIFY_TOKEN || "";
+  const query = process.argv[2] || "iPhone 15 128Gb";
 
   console.log("==========================================================");
   console.log(" SaleScout: Kaspi.kz Real-Time Repricer (Apify Module)   ");
   console.log("==========================================================");
-  console.log(`Product URL : ${sampleUrl}`);
-  console.log(`Apify Token : ${token.slice(0, 14)}...${token.slice(-4)}`);
-  console.log("----------------------------------------------------------");
-  console.log("Fetching live competitor offers from Kaspi.kz...");
+  console.log(`Searching Kaspi product: "${query}"...`);
 
-  const competitors = await fetchKaspiCompetitors(sampleUrl, token);
-
-  console.log(`\nFound ${competitors.length} competitor offers:`);
-  competitors.slice(0, 8).forEach((c, idx) => {
-    const stockStatus = c.inStock ? "IN STOCK" : "OUT OF STOCK";
-    console.log(
-      `  ${idx + 1}. [${stockStatus.padEnd(12)}] ${c.seller.padEnd(25)} ${c.price.toLocaleString("ru-RU")} ₸`
-    );
-  });
-  if (competitors.length > 8) {
-    console.log(`  ... and ${competitors.length - 8} more offers`);
+  const product = await fetchKaspiProductWithCompetitors(query, token);
+  if (!product) {
+    console.error("Товар не найден на Kaspi.kz!");
+    return;
   }
 
-  // Define our store's pricing configuration
-  const myProductConfig: Product = {
-    sku: "IPH15-128-BLK-LIVE",
-    name: "Apple iPhone 15 128Gb черный",
-    myPrice: 389990,
-    minPrice: 370000,
-    maxPrice: 620000,
-    step: 50,
-    competitors,
-  };
+  console.log(`\nТовар      : ${product.name}`);
+  console.log(`SKU        : ${product.sku}`);
+  console.log(`Ссылка     : ${product.kaspiUrl}`);
+  console.log(`Фото       : ${product.imageUrl}`);
+  console.log(`Конкурентов: ${product.competitors.length}`);
 
-  const result = calculatePrice(myProductConfig);
+  product.competitors.slice(0, 5).forEach((c, idx) => {
+    const stockStatus = c.inStock ? "В НАЛИЧИИ" : "НЕТ";
+    console.log(
+      `  ${idx + 1}. [${stockStatus.padEnd(10)}] ${c.seller.padEnd(25)} ${c.price.toLocaleString("ru-RU")} ₸`
+    );
+  });
+
+  const result = calculatePrice(product);
 
   console.log("\n==========================================================");
-  console.log(" REPRICING CALCULATION RESULT                            ");
+  console.log(" РЕЗУЛЬТАТ ПЕРЕРАСЧЁТА ЦЕНЫ                              ");
   console.log("==========================================================");
-  console.log(`SKU         : ${result.sku}`);
-  console.log(`Old Price   : ${result.oldPrice.toLocaleString("ru-RU")} ₸`);
-  console.log(`New Price   : ${result.newPrice.toLocaleString("ru-RU")} ₸`);
-  console.log(`Diff        : ${(result.newPrice - result.oldPrice).toLocaleString("ru-RU")} ₸`);
-  console.log(`Decision    : ${result.reason}`);
+  console.log(`Было (myPrice) : ${result.oldPrice.toLocaleString("ru-RU")} ₸`);
+  console.log(`Стало          : ${result.newPrice.toLocaleString("ru-RU")} ₸`);
+  console.log(`Разница        : ${(result.newPrice - result.oldPrice).toLocaleString("ru-RU")} ₸`);
+  console.log(`Причина        : ${result.reason}`);
   console.log("==========================================================\n");
 }
 
-// Execute CLI when directly run
 if (process.argv[1] && process.argv[1].includes("kaspi-apify")) {
   main().catch(console.error);
 }

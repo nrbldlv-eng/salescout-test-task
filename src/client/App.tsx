@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import type { Product, PriceResult, Reason } from "../types";
-import defaultProducts from "../../data/products.json";
+import defaultRealProducts from "../../data/real-kaspi-products.json";
 
 interface MergedProductRow {
   sku: string;
@@ -11,6 +11,8 @@ interface MergedProductRow {
   oldPrice: number;
   newPrice: number;
   reason: Reason;
+  imageUrl?: string;
+  kaspiUrl?: string;
   competitors: Product["competitors"];
 }
 
@@ -42,22 +44,23 @@ function formatTenge(value: number): string {
 }
 
 export function App() {
-  const [products, setProducts] = useState<Product[]>(defaultProducts as Product[]);
+  const [products, setProducts] = useState<Product[]>(
+    defaultRealProducts as Product[]
+  );
   const [results, setResults] = useState<PriceResult[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Search/Add Kaspi item
+  const [searchOrUrlInput, setSearchOrUrlInput] = useState<string>("");
+  const [isSearchingKaspi, setIsSearchingKaspi] = useState<boolean>(false);
+
+  // In-table search & filters
+  const [tableSearchQuery, setTableSearchQuery] = useState<string>("");
   const [selectedReason, setSelectedReason] = useState<Reason | "ALL">("ALL");
   const [expandedSku, setExpandedSku] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-
-  // Apify Live Kaspi Scraper Modal / Panel state
-  const [showApifyPanel, setShowApifyPanel] = useState<boolean>(false);
-  const [kaspiUrl, setKaspiUrl] = useState<string>(
-    "https://kaspi.kz/shop/p/apple-iphone-15-128gb-chernyi-113137790/"
-  );
-  const [scrapingLive, setScrapingLive] = useState<boolean>(false);
-  const [scrapeSuccessMsg, setScrapeSuccessMsg] = useState<string | null>(null);
 
   const fetchReprice = async (productsToReprice: Product[] = products) => {
     setLoading(true);
@@ -92,9 +95,74 @@ export function App() {
     }
   };
 
+  // Initial load: fetch real products from API or use real-kaspi-products.json
   useEffect(() => {
-    fetchReprice();
+    async function loadInitial() {
+      try {
+        const res = await fetch("/products");
+        if (res.ok) {
+          const data: Product[] = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            setProducts(data);
+            fetchReprice(data);
+            return;
+          }
+        }
+      } catch {
+        // Fallback to loaded defaultRealProducts
+      }
+      fetchReprice(products);
+    }
+
+    loadInitial();
   }, []);
+
+  // Handler to search and add a product directly from Kaspi.kz
+  const handleAddKaspiProduct = async (queryToAdd?: string) => {
+    const query = (queryToAdd || searchOrUrlInput).trim();
+    if (!query) return;
+
+    setIsSearchingKaspi(true);
+    setError(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await fetch("/kaspi/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(
+          (errJson as { error?: string }).error ||
+            `Товар "${query}" не найден на Kaspi.kz`
+        );
+      }
+
+      const data = (await res.json()) as {
+        product: Product;
+        result: PriceResult;
+      };
+
+      // Add to product list (or replace if existing SKU)
+      const filtered = products.filter((p) => p.sku !== data.product.sku);
+      const updatedProducts = [data.product, ...filtered];
+
+      setProducts(updatedProducts);
+      setSearchOrUrlInput("");
+      setSuccessMsg(`Товар "${data.product.name}" успешно добавлен с Kaspi.kz!`);
+
+      // Update reprice for whole list
+      await fetchReprice(updatedProducts);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Ошибка при поиске на Kaspi";
+      setError(msg);
+    } finally {
+      setIsSearchingKaspi(false);
+    }
+  };
 
   const mergedRows: MergedProductRow[] = useMemo(() => {
     const resultsMap = new Map<string, PriceResult>(
@@ -112,6 +180,8 @@ export function App() {
         oldPrice: res ? res.oldPrice : product.myPrice,
         newPrice: res ? res.newPrice : product.myPrice,
         reason: res ? res.reason : "UNDERCUT",
+        imageUrl: product.imageUrl,
+        kaspiUrl: product.kaspiUrl,
         competitors: product.competitors,
       };
     });
@@ -120,15 +190,15 @@ export function App() {
   const filteredRows = useMemo(() => {
     return mergedRows.filter((row) => {
       const matchesSearch =
-        row.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        row.name.toLowerCase().includes(searchQuery.toLowerCase());
+        row.sku.toLowerCase().includes(tableSearchQuery.toLowerCase()) ||
+        row.name.toLowerCase().includes(tableSearchQuery.toLowerCase());
 
       const matchesReason =
         selectedReason === "ALL" || row.reason === selectedReason;
 
       return matchesSearch && matchesReason;
     });
-  }, [mergedRows, searchQuery, selectedReason]);
+  }, [mergedRows, tableSearchQuery, selectedReason]);
 
   const stats = useMemo(() => {
     const total = mergedRows.length;
@@ -155,40 +225,13 @@ export function App() {
     setExpandedSku((prev) => (prev === sku ? null : sku));
   };
 
-  // Demo: simulate scraping live Kaspi product into the catalog
-  const handleLiveScrape = async () => {
-    setScrapingLive(true);
-    setScrapeSuccessMsg(null);
-    try {
-      // Simulate real scraper response or add live iPhone 15 with fresh Kaspi prices
-      await new Promise((res) => setTimeout(res, 800));
-
-      const newLiveProduct: Product = {
-        sku: "KASPI-LIVE-IPH15",
-        name: "Apple iPhone 15 128Gb (Данные из Kaspi)",
-        myPrice: 489990,
-        minPrice: 420000,
-        maxPrice: 600000,
-        step: 50,
-        competitors: [
-          { seller: "MEGAPHONE", price: 599990, inStock: true },
-          { seller: "Mechta.kz", price: 482990, inStock: true },
-          { seller: "Baly Shop", price: 475000, inStock: true },
-          { seller: "Galaxy Mobile", price: 474900, inStock: true },
-          { seller: "OutStockStore", price: 410000, inStock: false },
-        ],
-      };
-
-      const updated = [newLiveProduct, ...products.filter((p) => p.sku !== newLiveProduct.sku)];
-      setProducts(updated);
-      await fetchReprice(updated);
-      setScrapeSuccessMsg("Успешно получены живые офферы с Kaspi.kz и выполнен перерасчет цены!");
-    } catch {
-      setError("Ошибка при парсинге данных Kaspi.kz");
-    } finally {
-      setScrapingLive(false);
-    }
-  };
+  const quickQueries = [
+    "iPhone 15 128Gb",
+    "AirPods Pro 2",
+    "Samsung Galaxy A55",
+    "Dyson V15",
+    "Sony PlayStation 5",
+  ];
 
   return (
     <div className="app-wrapper">
@@ -199,20 +242,21 @@ export function App() {
           <div className="brand-info">
             <h1>
               SaleScout Repricer
-              <span className="version-pill">v1.2 Light</span>
+              <span className="live-pill">
+                <span className="live-indicator-dot" />
+                Live Kaspi
+              </span>
             </h1>
-            <p>Умный алгоритмический бот ценообразования для Kaspi.kz</p>
+            <p>Динамический перерасчёт цен на реальных данных Kaspi.kz</p>
           </div>
         </div>
 
         <div className="header-actions">
-          <button
-            className="pill-btn pill-btn-secondary"
-            onClick={() => setShowApifyPanel(!showApifyPanel)}
-          >
-            ⚡ {showApifyPanel ? "Скрыть Apify панель" : "Apify Live Kaspi"}
-          </button>
-
+          {lastUpdated && (
+            <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+              Обновлено в {lastUpdated}
+            </span>
+          )}
           <button
             className="pill-btn pill-btn-primary"
             onClick={() => fetchReprice(products)}
@@ -223,66 +267,90 @@ export function App() {
         </div>
       </header>
 
-      {/* Apify Kaspi Integration Panel */}
-      {showApifyPanel && (
-        <div className="apify-panel">
-          <div className="apify-panel-header">
-            <h2>
-              ⚡ Интеграция с Apify API (Живые данные Kaspi.kz)
-              <span className="pill-badge-apify">Token Connected</span>
-            </h2>
-            <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
-              Модуль: <code>src/kaspi-apify.ts</code>
-            </span>
-          </div>
-          <div className="apify-input-group">
+      {/* Kaspi Live Search & Add Card */}
+      <div className="search-add-card">
+        <div className="search-add-title">
+          <h2>
+            <span className="kaspi-badge-icon">KASPI</span>
+            Поиск и добавление реального товара
+          </h2>
+          <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+            Парсинг карточки, продавцов и остатков в реальном времени
+          </span>
+        </div>
+
+        <form
+          className="search-add-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAddKaspiProduct();
+          }}
+        >
+          <div className="search-add-input-wrapper">
+            <span className="search-add-icon">🔎</span>
             <input
               type="text"
-              className="apify-input"
-              value={kaspiUrl}
-              onChange={(e) => setKaspiUrl(e.target.value)}
-              placeholder="Вставьте ссылку на товар Kaspi.kz..."
+              className="search-add-input"
+              value={searchOrUrlInput}
+              onChange={(e) => setSearchOrUrlInput(e.target.value)}
+              placeholder="Вставьте ссылку на товар Kaspi.kz или введите название (например: iPhone 15 128Gb)..."
+              disabled={isSearchingKaspi}
             />
+          </div>
+          <button
+            type="submit"
+            className="pill-btn pill-btn-primary"
+            disabled={isSearchingKaspi || !searchOrUrlInput.trim()}
+          >
+            {isSearchingKaspi ? "Поиск и парсинг..." : "⚡ Добавить с Kaspi"}
+          </button>
+        </form>
+
+        <div className="quick-search-chips">
+          <span className="quick-chips-label">Быстрый поиск:</span>
+          {quickQueries.map((q) => (
             <button
-              className="pill-btn pill-btn-primary"
-              onClick={handleLiveScrape}
-              disabled={scrapingLive}
+              key={q}
+              type="button"
+              className="quick-chip-btn"
+              onClick={() => handleAddKaspiProduct(q)}
+              disabled={isSearchingKaspi}
             >
-              {scrapingLive ? "Парсинг через Apify..." : "Спарсить и пересчитать"}
+              + {q}
             </button>
-          </div>
-          {scrapeSuccessMsg && (
-            <div
-              style={{
-                fontSize: "13px",
-                color: "#166534",
-                backgroundColor: "#f0fdf4",
-                padding: "8px 14px",
-                borderRadius: "var(--radius-pill)",
-                display: "inline-block",
-              }}
-            >
-              ✓ {scrapeSuccessMsg}
-            </div>
-          )}
-          <div className="apify-status-text" style={{ marginTop: "8px" }}>
-            Для автономного CLI запуска выполните: <code>npx tsx src/kaspi-apify.ts</code>
-          </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Notifications */}
+      {successMsg && (
+        <div className="banner-success">
+          <span>✓ {successMsg}</span>
+          <button
+            onClick={() => setSuccessMsg(null)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#166534",
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      {/* Error alert */}
       {error && (
         <div className="banner-alert">
           <div>
-            <strong>Ошибка соединения:</strong> {error}
+            <strong>Ошибка:</strong> {error}
           </div>
           <button
             className="pill-btn pill-btn-secondary"
             style={{ padding: "4px 12px", fontSize: "12px" }}
-            onClick={() => fetchReprice(products)}
+            onClick={() => setError(null)}
           >
-            Повторить
+            Закрыть
           </button>
         </div>
       )}
@@ -300,7 +368,7 @@ export function App() {
             </span>
           </div>
           <div className="stat-widget-value">{stats.total}</div>
-          <div className="stat-widget-sub">Активных позиций</div>
+          <div className="stat-widget-sub">Реальных позиций Kaspi</div>
         </div>
 
         <div className="stat-widget">
@@ -310,7 +378,7 @@ export function App() {
               className="stat-widget-pill"
               style={{ backgroundColor: "#ecfdf5", color: "#047857" }}
             >
-              Лучшая цена
+              1-е место
             </span>
           </div>
           <div
@@ -319,7 +387,7 @@ export function App() {
           >
             {stats.byReason.UNDERCUT}
           </div>
-          <div className="stat-widget-sub">UNDERCUT (1-е место)</div>
+          <div className="stat-widget-sub">UNDERCUT (лучшая цена)</div>
         </div>
 
         <div className="stat-widget">
@@ -329,7 +397,7 @@ export function App() {
               className="stat-widget-pill"
               style={{ backgroundColor: "#fffbeb", color: "#b45309" }}
             >
-              Защита маржи
+              Защита
             </span>
           </div>
           <div className="stat-widget-value" style={{ color: "var(--atmin-text)" }}>
@@ -345,7 +413,7 @@ export function App() {
               className="stat-widget-pill"
               style={{ backgroundColor: "#f5f3ff", color: "#6d28d9" }}
             >
-              Макс. профит
+              Профит
             </span>
           </div>
           <div className="stat-widget-value" style={{ color: "var(--atmax-text)" }}>
@@ -371,16 +439,27 @@ export function App() {
         </div>
       </div>
 
-      {/* Toolbar */}
+      {/* Toolbar: Search in Table and Filters */}
       <div className="toolbar-container">
-        <div className="search-pill-wrapper">
-          <span className="search-icon">🔍</span>
+        <div style={{ position: "relative", width: "320px" }}>
+          <span
+            style={{
+              position: "absolute",
+              left: "14px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--text-light)",
+            }}
+          >
+            🔍
+          </span>
           <input
             type="text"
-            className="search-pill"
-            placeholder="Поиск по названию или SKU..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            className="search-add-input"
+            style={{ paddingLeft: "38px" }}
+            placeholder="Фильтр таблицы по названию или SKU..."
+            value={tableSearchQuery}
+            onChange={(e) => setTableSearchQuery(e.target.value)}
           />
         </div>
 
@@ -432,8 +511,7 @@ export function App() {
           <table className="clean-table">
             <thead>
               <tr>
-                <th>SKU</th>
-                <th>Название товара</th>
+                <th>Товар (Фото и Название на Kaspi.kz)</th>
                 <th>Диапазон [Min - Max]</th>
                 <th>Было</th>
                 <th>Стало</th>
@@ -444,7 +522,7 @@ export function App() {
             <tbody>
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-table-state">
+                  <td colSpan={6} className="empty-table-state">
                     Товары не найдены
                   </td>
                 </tr>
@@ -464,34 +542,77 @@ export function App() {
                           isExpanded ? "table-row-expanded" : ""
                         }`}
                         onClick={() => toggleExpand(row.sku)}
-                        title="Нажмите, чтобы просмотреть конкурентов"
+                        title="Нажмите, чтобы просмотреть реальных продавцов Kaspi"
                       >
                         <td>
-                          <span className="sku-tag">{row.sku}</span>
-                        </td>
-                        <td>
-                          <div className="item-title">{row.name}</div>
-                          <div className="item-subtitle">
-                            Шаг: {row.step} ₸ • Конкурентов: {row.competitors.length} (
-                            {row.competitors.filter((c) => c.inStock).length} в наличии)
-                            <span>{isExpanded ? "▲" : "▼"}</span>
+                          <div className="product-cell">
+                            {row.imageUrl ? (
+                              <img
+                                src={row.imageUrl}
+                                alt={row.name}
+                                className="product-thumb"
+                                loading="lazy"
+                                onError={(e) => {
+                                  // Fallback to placeholder on error
+                                  (e.target as HTMLElement).style.display = "none";
+                                }}
+                              />
+                            ) : (
+                              <div className="product-thumb-placeholder">📦</div>
+                            )}
+
+                            <div className="product-info-box">
+                              {row.kaspiUrl ? (
+                                <a
+                                  href={row.kaspiUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="product-kaspi-link"
+                                  onClick={(e) => e.stopPropagation()}
+                                  title="Открыть карточку товара на Kaspi.kz"
+                                >
+                                  {row.name}
+                                  <span className="external-icon">↗</span>
+                                </a>
+                              ) : (
+                                <span style={{ fontWeight: 600 }}>{row.name}</span>
+                              )}
+
+                              <div className="item-meta">
+                                <span className="sku-tag">{row.sku}</span>
+                                <span>Шаг: {row.step} ₸</span>
+                                <span>•</span>
+                                <span>
+                                  Продавцов: {row.competitors.length} (
+                                  {
+                                    row.competitors.filter((c) => c.inStock).length
+                                  }{" "}
+                                  в наличии)
+                                </span>
+                                <span>{isExpanded ? "▲" : "▼"}</span>
+                              </div>
+                            </div>
                           </div>
                         </td>
+
                         <td>
                           <span className="range-text">
                             {formatTenge(row.minPrice)} — {formatTenge(row.maxPrice)}
                           </span>
                         </td>
+
                         <td>
                           <span className="old-price-val">
                             {formatTenge(row.oldPrice)}
                           </span>
                         </td>
+
                         <td>
                           <span className="new-price-val">
                             {formatTenge(row.newPrice)}
                           </span>
                         </td>
+
                         <td>
                           {diff < 0 ? (
                             <span className="delta-pill down">
@@ -505,6 +626,7 @@ export function App() {
                             <span className="delta-pill neutral">0 ₸ (0%)</span>
                           )}
                         </td>
+
                         <td>
                           <div
                             className={`decision-pill decision-${row.reason}`}
@@ -518,10 +640,10 @@ export function App() {
 
                       {isExpanded && (
                         <tr>
-                          <td colSpan={7} style={{ padding: 0 }}>
+                          <td colSpan={6} style={{ padding: 0 }}>
                             <div className="competitors-accordion">
                               <div className="competitors-head">
-                                Конкуренты по позиции {row.sku} ({row.name}):
+                                Продавцы на Kaspi.kz по позиции {row.name}:
                               </div>
                               {row.competitors.length === 0 ? (
                                 <div
@@ -530,7 +652,7 @@ export function App() {
                                     fontSize: "13px",
                                   }}
                                 >
-                                  Конкуренты отсутствуют (будет выставлен maxPrice)
+                                  Конкуренты отсутствуют (выставлен максимум maxPrice)
                                 </div>
                               ) : (
                                 <div className="competitors-grid">

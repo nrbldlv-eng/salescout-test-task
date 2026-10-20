@@ -5,9 +5,23 @@
 Проект выполнен в виде fullstack-приложения:
 - **Core-логика:** чистая функция `calculatePrice` в [src/pricing.ts](src/pricing.ts).
 - **Backend API:** Express HTTP-сервер с эндпоинтом `POST /reprice` в [src/app.ts](src/app.ts).
-- **Frontend UI:** интерактивное SPA на React 19 + Vite со светлой минималистичной темой (Clean Desktop Utility UI) и овальными кнопками-пилюлями (Pill Buttons) в [src/client/App.tsx](src/client/App.tsx).
-- **Интеграция с Apify API:** модуль сбора реальных офферов с Kaspi.kz и динамического пересчёта цен в [src/kaspi-apify.ts](src/kaspi-apify.ts).
-- **Тесты:** 24 теста на Vitest в [src/pricing.test.ts](src/pricing.test.ts), [src/app.test.ts](src/app.test.ts) и [src/kaspi-apify.test.ts](src/kaspi-apify.test.ts).
+- **Frontend UI:** интерактивное SPA на React 19 + Vite со светлой минималистичной темой (Clean Desktop Utility UI), поддержкой реальных фото и прямых ссылок на Kaspi.kz, добавлением товаров по названию или URL в [src/client/App.tsx](src/client/App.tsx).
+- **Интеграция с Apify API и Kaspi.kz:** модуль живого поиска, парсинга продавцов и пересчёта цен в [src/kaspi-apify.ts](src/kaspi-apify.ts).
+- **Тесты:** 25 тестов на Vitest в [src/pricing.test.ts](src/pricing.test.ts), [src/app.test.ts](src/app.test.ts) и [src/kaspi-apify.test.ts](src/kaspi-apify.test.ts).
+
+---
+
+## Реальные данные Kaspi.kz, поиск и изображения
+
+В проекте полностью исключены фейковые (моковые) данные:
+1. **Реальные товары:** таблица работает исключительно на актуальных данных Kaspi.kz (Apple iPhone 15, AirPods Pro 2, Samsung Galaxy A55, Dyson V15 и др.).
+2. **Поиск и добавление товаров:**
+   - Поисковая форма вверху принимает как прямую ссылку на товар Kaspi.kz, так и текстовый запрос (например, `iPhone 15 128Gb` или `PlayStation 5`).
+   - При вводе названия модуль автоматически находит товар через Kaspi Search API, извлекает его ID, название, фото и ссылку на маркетплейс, а затем парсит всех продавцов и их остатки.
+3. **Фотографии и ссылки в таблице:**
+   - В каждой строке выводится оригинальное превью-изображение товара с CDN Kaspi.
+   - Название товара оформлено как кликабельная ссылка со значком `↗`, ведущая непосредственно на карточку товара на Kaspi.kz.
+   - Клик по строке раскрывает список реальных магазинов (MEGAPHONE, Mechta.kz и др.) со статусами наличия и ценами.
 
 ---
 

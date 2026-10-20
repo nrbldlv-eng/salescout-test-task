@@ -15,6 +15,14 @@ export default defineConfig({
         target: "http://localhost:3000",
         changeOrigin: true,
       },
+      "/products": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
+      "/kaspi": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
     },
   },
 });
