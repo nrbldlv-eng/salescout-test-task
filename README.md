@@ -1,12 +1,28 @@
 # SaleScout — Прайс-бот для Kaspi.kz
 
-Автоматизированный сервис управления ценами для продавцов на Kaspi.kz. Бот отслеживает цены конкурентов в наличии и выставляет оптимальную цену, чтобы удерживать первое место в выдаче, защищая маржинальность продавца.
+Автоматизированный SaaS-сервис управления ценами для продавцов на Kaspi.kz. Бот отслеживает цены конкурентов в наличии и выставляет оптимальную цену, чтобы удерживать первое место в выдаче, защищая маржинальность продавца.
 
 Проект выполнен в виде fullstack-приложения:
 - **Core-логика:** чистая функция `calculatePrice` в [src/pricing.ts](src/pricing.ts).
 - **Backend API:** Express HTTP-сервер с эндпоинтом `POST /reprice` в [src/app.ts](src/app.ts).
-- **Frontend UI:** интерактивное SPA на React 19 + Vite с таблицей «Было / Стало» в [src/client/App.tsx](src/client/App.tsx).
-- **Тесты:** полный набор модульных и интеграционных тестов на Vitest в [src/pricing.test.ts](src/pricing.test.ts) и [src/app.test.ts](src/app.test.ts).
+- **Frontend UI:** интерактивное SPA на React 19 + Vite со светлой минималистичной темой (Clean Desktop Utility UI) и овальными кнопками-пилюлями (Pill Buttons) в [src/client/App.tsx](src/client/App.tsx).
+- **Интеграция с Apify API:** модуль сбора реальных офферов с Kaspi.kz и динамического пересчёта цен в [src/kaspi-apify.ts](src/kaspi-apify.ts).
+- **Тесты:** 24 теста на Vitest в [src/pricing.test.ts](src/pricing.test.ts), [src/app.test.ts](src/app.test.ts) и [src/kaspi-apify.test.ts](src/kaspi-apify.test.ts).
+
+---
+
+## Новый дизайн интерфейса (Light Theme)
+
+Интерфейс веб-приложения переработан в стиле современной утилиты:
+- **Фон:** мягкий светлый нейтральный фон (`#f5f5f7`).
+- **Контейнеры и карточки:** чистые белые панели (`#ffffff`) с радиусом скругления `20px`, деликатными границами `1px solid #e5e7eb` и мягкими тенями.
+- **Пилюли и фильтры:** элементы управления в форме овальных пилюль (`border-radius: 9999px`) с плавными состояниями активности и контрастными индикаторами.
+- **Статусы и цветовая палитра:**
+  - `UNDERCUT` — мятно-зеленый бейдж (снижение цены, 1-е место);
+  - `AT_MIN` — янтарный бейдж (защита минимальной маржи продавца);
+  - `AT_MAX` — фиолетовый бейдж (максимальный профит при дорогих конкурентах);
+  - `NO_COMPETITORS` — сланцевый нейтральный бейдж (отсутствие предложений в наличии).
+- **Интерактивные офферы:** клик по строке товара раскрывает детальный список конкурентов со статусами наличия.
 
 ---
 
@@ -21,7 +37,17 @@
 npm install
 ```
 
-### 2. Запуск тестов
+### 2. Настройка переменных окружения
+Скопируйте пример файла конфигурации или укажите ваш токен Apify:
+```bash
+cp .env.example .env
+```
+В файле `.env`:
+```env
+APIFY_TOKEN=your_apify_api_token_here
+```
+
+### 3. Запуск тестов
 Запуск всех юнит- и интеграционных тестов:
 ```bash
 npm test
@@ -32,21 +58,72 @@ npm test
 npm run typecheck
 ```
 
-### 3. Запуск в режиме разработки
+### 4. Запуск в режиме разработки
 Запуск бэкенда (порт 3000) и фронтенда (порт 5173) одной командой:
 ```bash
 npm run dev
 ```
 
-После этого откройте в браузере: [http://localhost:5173](http://localhost:5173)
+Откройте в браузере: [http://localhost:5173](http://localhost:5173)
 
 > Также доступны раздельные команды:
 > - `npm run dev:server` — запуск только Express API с автоперезагрузкой (`tsx watch`)
 > - `npm run dev:client` — запуск только Vite dev-сервера
 
-### 4. Сборка для продакшена
+### 5. Сборка для продакшена
 ```bash
 npm run build
+```
+
+---
+
+## Интеграция с Apify (Реальные данные Kaspi.kz)
+
+Модуль [src/kaspi-apify.ts](src/kaspi-apify.ts) позволяет парсить реальные предложения продавцов с живых карточек товаров Kaspi.kz через Apify API и выполнять перерасчет цены в реальном времени.
+
+### Основные функции модуля:
+1. `fetchKaspiCompetitors(productUrl, apifyToken)`:
+   - Аутентифицируется в Apify REST API (`/v2/users/me`).
+   - Извлекает ID товара из ссылки Kaspi.kz.
+   - Получает актуальный список продавцов и приводит к единому формату `Competitor[]` (`seller`, `price`, `inStock`).
+2. `runRealReprice(productConfig, productUrl, apifyToken)`:
+   - Объединяет конфигурацию вашего товара с собранными конкурентами.
+   - Передает данные в чистую функцию `calculatePrice(product)`.
+   - Возвращает итоговый `PriceResult`.
+
+### Запуск CLI-скрипта
+Для тестирования в терминале выполните:
+```bash
+npx tsx src/kaspi-apify.ts
+```
+
+Пример вывода:
+```text
+==========================================================
+ SaleScout: Kaspi.kz Real-Time Repricer (Apify Module)   
+==========================================================
+Product URL : https://kaspi.kz/shop/p/apple-iphone-15-128gb-chernyi-113137790/
+Apify Token : apify_api_SCpy...sB8y
+----------------------------------------------------------
+Fetching live competitor offers from Kaspi.kz...
+[Apify] Authenticated successfully as user: fathomable_angel
+
+Found 20 competitor offers:
+  1. [IN STOCK    ] MEGAPHONE                 599 990 ₸
+  2. [IN STOCK    ] Mechta.kz                 482 990 ₸
+  3. [IN STOCK    ] Baly Shop                 475 000 ₸
+  4. [IN STOCK    ] Galaxy Mobile             474 900 ₸
+  ... and 16 more offers
+
+==========================================================
+ REPRICING CALCULATION RESULT                            
+==========================================================
+SKU         : IPH15-128-BLK-LIVE
+Old Price   : 389 990 ₸
+New Price   : 429 950 ₸
+Diff        : 39 960 ₸
+Decision    : UNDERCUT
+==========================================================
 ```
 
 ---
@@ -55,19 +132,22 @@ npm run build
 
 ```text
 ├── data/
-│   ├── products.json        # Пример входных данных по товарам и конкурентам
+│   ├── products.json        # Демонстрационный набор товаров и конкурентов
 │   └── expected.json        # Ожидаемый эталонный результат пересчёта
 ├── src/
-│   ├── client/              # React-приложение (Vite)
-│   │   ├── App.tsx          # Основной компонент: таблица Было/Стало, фильтры, карточки
+│   ├── client/              # React-приложение (Vite, Clean Light Theme)
+│   │   ├── App.tsx          # Таблица Было/Стало, фильтры, карточки, Apify drawer
 │   │   ├── main.tsx         # Точка монтирования React
-│   │   └── styles.css       # Стили интерфейса (темная современная тема)
+│   │   └── styles.css       # Премиальные стили Light UI с пилюлями
 │   ├── app.ts               # Express-приложение и маршруты API
 │   ├── app.test.ts          # Интеграционные тесты API эндпоинтов (Supertest)
 │   ├── server.ts            # Точка запуска HTTP-сервера (порт 3000)
 │   ├── pricing.ts           # ЧИСТАЯ ФУНКЦИЯ calculatePrice (неизменная сигнатура)
 │   ├── pricing.test.ts      # Модульные тесты алгоритма ценообразования
+│   ├── kaspi-apify.ts       # Модуль скрапинга Kaspi.kz через Apify API + CLI
+│   ├── kaspi-apify.test.ts  # Тесты парсера URL и интеграции модуля Apify
 │   └── types.ts             # Интерфейсы Product, Competitor, PriceResult, Reason
+├── .env.example             # Шаблон конфигурации переменных окружения
 ├── index.html               # Шаблон Vite для React
 ├── vite.config.ts           # Конфигурация Vite с проксированием /reprice на Express
 ├── tsconfig.json            # Настройки TypeScript
@@ -110,69 +190,13 @@ export function calculatePrice(product: Product): PriceResult;
 - **Ответ 200**: `PriceResult[]` в том же порядке.
 - **Ответ 400**: Если тело запроса не является массивом или элементы некорректны (`{ "error": "..." }`).
 
-#### Пример запроса:
-```http
-POST /reprice HTTP/1.1
-Content-Type: application/json
-
-[
-  {
-    "sku": "IPH15-128-BLK",
-    "name": "Apple iPhone 15 128Gb черный",
-    "myPrice": 389990,
-    "minPrice": 370000,
-    "maxPrice": 420000,
-    "step": 10,
-    "competitors": [
-      { "seller": "TechnoMarket", "price": 384990, "inStock": true },
-      { "seller": "GadgetKZ", "price": 379990, "inStock": false }
-    ]
-  }
-]
-```
-
-#### Пример ответа:
-```json
-[
-  {
-    "sku": "IPH15-128-BLK",
-    "oldPrice": 389990,
-    "newPrice": 384980,
-    "reason": "UNDERCUT"
-  }
-]
-```
-
-### Дополнительные эндпоинты
-- `GET /health` — проверка работоспособности сервера (`{ "status": "ok" }`).
-- `GET /products` — получение демонстрационных данных из `data/products.json`.
-
 ---
 
 ## Тестирование
 
-Тесты запускаются командой `npm test` с помощью Vitest:
-- **`src/pricing.test.ts`**:
-  - `NO_COMPETITORS`: пустой список конкурентов и список с только `inStock: false`.
-  - `inStock`: игнорирование дешёвых конкурентов, которых нет на складе.
-  - `UNDERCUT`: обычное снижение, равенство граничным значениям `minPrice` и `maxPrice`, нулевой шаг (`step: 0`).
-  - `AT_MIN`: срабатывание нижнего порога при слишком низких ценах конкурентов.
-  - `AT_MAX`: срабатывание верхнего порога, когда конкуренты продают намного дороже `maxPrice`.
-  - Дробный `step` и корректное округление `Math.floor`.
-  - Полный регрессионный тест: проверка соответствия всего `data/products.json` эталонному `data/expected.json`.
-  - Неизменность `oldPrice = myPrice`.
-- **`src/app.test.ts`**:
-  - Валидация входных данных (возврат HTTP 400 при некорректном JSON или не-массиве).
-  - Успешный перерасчёт через HTTP API и сохранение порядка элементов.
+Запуск тестов: `npm test`
+- **`src/pricing.test.ts` (13 тестов)**: все бизнес-кейсы алгоритма (UNDERCUT, границы min/max, zero step, fractional step, filtering inStock, датасет `data/products.json`).
+- **`src/app.test.ts` (6 тестов)**: коды ответов HTTP API (200, 400), валидация тела запроса, неизменность порядка.
+- **`src/kaspi-apify.test.ts` (5 тестов)**: парсинг URL Kaspi, валидация токена Apify, интеграционный расчет на реальных данных.
 
----
-
-## Предлагаемая история Git-коммитов
-
-Для сохранения естественной истории разработки в вашем репозитории рекомендуется оформить следующие коммиты:
-
-1. `feat: implement pure calculatePrice function according to business logic`
-2. `test: add exhaustive vitest unit tests for calculatePrice and edge cases`
-3. `feat: setup express reprice api endpoint with input validation and tests`
-4. `feat: build react vite application with before-after comparison table`
-5. `docs: update readme with setup, testing and architecture documentation`
+Итого: **24 теста** успешно проходят.
